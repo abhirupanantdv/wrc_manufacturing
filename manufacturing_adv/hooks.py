@@ -241,4 +241,47 @@ app_license = "mit"
 # default_log_clearing_doctypes = {
 # 	"Logging DocType Name": 30  # days to retain logs
 # }
-
+doc_events = {
+    "Work Order": {
+        "on_submit": "manufacturing_adv.work_order_workflow.process_work_order_workflow",
+        "on_update_after_submit": "manufacturing_adv.work_order_workflow.process_work_order_workflow",
+        "on_change": "manufacturing_adv.work_order_workflow.process_work_order_workflow",
+    }
+}
+fixtures = [
+    {
+        "dt": "Workflow State",
+        "filters": [
+            [
+                "name",
+                "in",
+                [
+                    "Draft",
+                    "Material Transfer Approved",
+                    "Production Approved",
+                    "Completed",
+                ],
+            ]
+        ],
+    },
+    {
+        "dt": "Workflow Action",
+        "filters": [
+            [
+                "name",
+                "in",
+                [
+                    "Approve and Transfer Material",
+                    "Approve Production",
+                    "Approve and Manufacture",
+                ],
+            ]
+        ],
+    },
+    {
+        "dt": "Workflow",
+        "filters": [
+            ["name", "=", "Work Order Approval"]
+        ],
+    },
+]
