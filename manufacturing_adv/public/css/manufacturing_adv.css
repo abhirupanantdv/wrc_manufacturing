@@ -1,0 +1,22 @@
+/* manufacturing_adv: Hide all default custom buttons on Work Order Form */
+div[id="page-Work Order"] .page-actions .custom-actions,
+div[data-page-route="Work Order"] .page-actions .custom-actions,
+div[id="page-Work Order"] .custom-actions,
+div[data-page-route="Work Order"] .custom-actions,
+div[id="page-Work Order"] .inner-group-button[data-label="Status"],
+div[data-page-route="Work Order"] .inner-group-button[data-label="Status"],
+div[id="page-Work Order"] .inner-group-button[data-label="Create"],
+div[data-page-route="Work Order"] .inner-group-button[data-label="Create"],
+div[id="page-Work Order"] button[data-label="Material%20Consumption"],
+div[data-page-route="Work Order"] button[data-label="Material%20Consumption"],
+div[id="page-Work Order"] button[data-label="Finish"],
+div[data-page-route="Work Order"] button[data-label="Finish"],
+div[id="page-Work Order"] button[data-label="Start"],
+div[data-page-route="Work Order"] button[data-label="Start"],
+div[id="page-Work Order"] button[data-label="Create%20Pick%20List"],
+div[data-page-route="Work Order"] button[data-label="Create%20Pick%20List"],
+div[id="page-Work Order"] button[data-label="Create%20Job%20Card"],
+div[data-page-route="Work Order"] button[data-label="Create%20Job%20Card"] {
+	display: none !important;
+}
+
