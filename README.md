@@ -41,3 +41,4 @@ This app can use GitHub Actions for CI. The following workflows are configured:
 mit
 # wrc_manufacturing
 # wrc_manufacturing
+# wrc_manufacturing
