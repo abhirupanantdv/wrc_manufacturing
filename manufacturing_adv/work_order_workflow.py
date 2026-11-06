@@ -1,6 +1,6 @@
 import frappe
 from frappe import _
-from frappe.utils import flt
+from frappe.utils import cint, flt, nowdate, add_days
 
 from erpnext.manufacturing.doctype.work_order.work_order import make_stock_entry
 
@@ -93,6 +93,35 @@ def _get_submitted_stock_entries(work_order, purpose):
 #     return stock_entry
 
 
+def get_stock_entry_naming_series(work_order):
+    """
+    Returns the naming series for auto-created Stock Entry.
+    Uses GLC-STE-.YYYY.- (matching the Work Order's prefix if applicable).
+    """
+    if not work_order:
+        return "GLC-STE-.YYYY.-"
+
+    if isinstance(work_order, str):
+        res = frappe.db.get_value(
+            "Work Order", work_order, ["naming_series", "name"]
+        )
+        wo_series, wo_name = res if res else ("", work_order)
+    else:
+        wo_series = work_order.get("naming_series") or ""
+        wo_name = work_order.get("name") or ""
+
+    for candidate in ["GLC", "NN1", "CNO", "CPCC", "CPPB"]:
+        if (wo_series and wo_series.startswith(candidate)) or (wo_name and wo_name.startswith(candidate)):
+            target_series = f"{candidate}-STE-.YYYY.-"
+            options = (
+                frappe.get_meta("Stock Entry").get_field("naming_series").options or ""
+            ).split("\n")
+            if target_series in options:
+                return target_series
+
+    return "GLC-STE-.YYYY.-"
+
+
 def _make_and_submit_stock_entry(work_order_name, purpose, qty):
     qty = flt(qty)
 
@@ -116,9 +145,9 @@ def _make_and_submit_stock_entry(work_order_name, purpose, qty):
     stock_entry = frappe.get_doc(stock_entry_dict)
 
     # ---------------------------------------------------------
-    # CUSTOM NAMING SERIES
+    # CUSTOM NAMING SERIES (Default: GLC-STE-.YYYY.-)
     # ---------------------------------------------------------
-    stock_entry.naming_series = "CNO-STE-"
+    stock_entry.naming_series = get_stock_entry_naming_series(work_order_name)
 
     # ---------------------------------------------------------
     # CUSTOM REMARKS
@@ -285,6 +314,17 @@ def create_manufacture_entry(doc):
         if manufacture_qty <= 0:
             return
 
+        # Check if finished good item requires batch or serial tracking
+        item = frappe.get_cached_doc("Item", work_order.production_item)
+        if item.has_batch_no or item.has_serial_no:
+            frappe.throw(
+                _(
+                    "Item {0} requires Batch No / Serial No to manufacture.<br><br>"
+                    "Please use the <b>Approve and Manufacture</b> dialog on the Work Order to create or select a batch."
+                ).format(frappe.bold(work_order.production_item)),
+                title=_("Batch / Serial Details Required"),
+            )
+
         stock_entry = _make_and_submit_stock_entry(
             work_order.name,
             purpose,
@@ -371,3 +411,240 @@ def diagnostic(work_order):
             "Manufacture",
         ),
     }
+
+
+@frappe.whitelist()
+def get_item_batch_details(item_code):
+    item = frappe.get_cached_doc("Item", item_code)
+    return {
+        "item_code": item.name,
+        "item_name": item.item_name,
+        "has_batch_no": cint(item.has_batch_no),
+        "has_serial_no": cint(item.has_serial_no),
+        "has_expiry_date": cint(item.has_expiry_date),
+        "shelf_life_in_days": cint(item.shelf_life_in_days),
+        "create_new_batch": cint(item.create_new_batch),
+        "batch_number_series": item.batch_number_series,
+    }
+
+
+@frappe.whitelist()
+def get_or_create_draft_manufacture_entry(work_order, qty=None):
+    wo = frappe.get_doc("Work Order", work_order)
+    if wo.docstatus != 1:
+        frappe.throw(_("Work Order {0} must be submitted.").format(wo.name))
+
+    # Check for existing draft Manufacture Stock Entry
+    drafts = frappe.get_all(
+        "Stock Entry",
+        filters={
+            "work_order": wo.name,
+            "purpose": "Manufacture",
+            "docstatus": 0,
+        },
+        fields=["name"],
+        order_by="creation desc",
+        limit=1,
+    )
+    if drafts:
+        return drafts[0].name
+
+    available_to_manufacture = (
+        flt(wo.qty) - flt(wo.produced_qty)
+        if wo.skip_transfer
+        else flt(wo.material_transferred_for_manufacturing) - flt(wo.produced_qty)
+    )
+    remaining_wo_qty = flt(wo.qty) - flt(wo.produced_qty)
+    manufacture_qty = flt(qty) if qty else min(available_to_manufacture, remaining_wo_qty)
+
+    if manufacture_qty <= 0:
+        frappe.throw(
+            _(
+                "There is no transferred quantity available to manufacture for Work Order {0}."
+            ).format(wo.name)
+        )
+
+    stock_entry_dict = make_stock_entry(wo.name, "Manufacture", manufacture_qty)
+    if not stock_entry_dict:
+        frappe.throw(_("Failed to create Manufacture Stock Entry."))
+
+    stock_entry = frappe.get_doc(stock_entry_dict)
+    stock_entry.naming_series = get_stock_entry_naming_series(wo)
+    stock_entry.remarks = f"Manufacturing stock entry against Work Order {wo.name}"
+    stock_entry.flags.ignore_permissions = True
+    stock_entry.insert(ignore_permissions=True)
+
+    return stock_entry.name
+
+
+@frappe.whitelist()
+def complete_manufacture_with_batch(
+    work_order,
+    batch_action="Create New Batch",
+    batch_id=None,
+    existing_batch_no=None,
+    manufacturing_date=None,
+    expiry_date=None,
+    serial_nos=None,
+):
+    wo = frappe.get_doc("Work Order", work_order)
+    if wo.docstatus != 1:
+        frappe.throw(_("Work Order {0} must be submitted.").format(wo.name))
+
+    item = frappe.get_cached_doc("Item", wo.production_item)
+
+    batch_name = None
+    if item.has_batch_no:
+        if batch_action == "Use Existing Batch":
+            if not existing_batch_no:
+                frappe.throw(_("Please select an existing Batch No."))
+            batch_item = frappe.db.get_value("Batch", existing_batch_no, "item")
+            if batch_item != wo.production_item:
+                frappe.throw(
+                    _("Batch {0} does not belong to item {1}.").format(
+                        existing_batch_no, wo.production_item
+                    )
+                )
+            batch_name = existing_batch_no
+        else:
+            # Create New Batch
+            if not batch_id and not item.create_new_batch:
+                frappe.throw(
+                    _("Batch ID / Lot No is required for item {0}.").format(
+                        wo.production_item
+                    )
+                )
+
+            mfg_date = manufacturing_date or nowdate()
+            exp_date = expiry_date
+            if item.has_expiry_date and not exp_date:
+                if item.shelf_life_in_days:
+                    exp_date = add_days(mfg_date, item.shelf_life_in_days)
+                else:
+                    frappe.throw(
+                        _("Expiry Date is mandatory for batched item {0}.").format(
+                            wo.production_item
+                        )
+                    )
+
+            batch_args = {
+                "doctype": "Batch",
+                "item": wo.production_item,
+                "manufacturing_date": mfg_date,
+            }
+            if batch_id:
+                batch_args["batch_id"] = batch_id.strip()
+            if exp_date:
+                batch_args["expiry_date"] = exp_date
+
+            batch_doc = frappe.get_doc(batch_args)
+            batch_doc.flags.ignore_permissions = True
+            batch_doc.insert(ignore_permissions=True)
+            batch_name = batch_doc.name
+
+    if item.has_serial_no:
+        if not serial_nos and not item.serial_no_series:
+            frappe.throw(
+                _("Serial numbers are mandatory for item {0}.").format(
+                    wo.production_item
+                )
+            )
+
+    # Check for existing draft Stock Entry or create one
+    drafts = frappe.get_all(
+        "Stock Entry",
+        filters={
+            "work_order": wo.name,
+            "purpose": "Manufacture",
+            "docstatus": 0,
+        },
+        fields=["name"],
+        order_by="creation desc",
+        limit=1,
+    )
+
+    if drafts:
+        se = frappe.get_doc("Stock Entry", drafts[0].name)
+    else:
+        available_to_manufacture = (
+            flt(wo.qty) - flt(wo.produced_qty)
+            if wo.skip_transfer
+            else flt(wo.material_transferred_for_manufacturing) - flt(wo.produced_qty)
+        )
+        remaining_wo_qty = flt(wo.qty) - flt(wo.produced_qty)
+        manufacture_qty = min(available_to_manufacture, remaining_wo_qty)
+        if manufacture_qty <= 0:
+            frappe.throw(_("No quantity available to manufacture."))
+
+        se_dict = make_stock_entry(wo.name, "Manufacture", manufacture_qty)
+        se = frappe.get_doc(se_dict)
+        se.naming_series = get_stock_entry_naming_series(wo)
+        se.remarks = f"Manufacturing stock entry against Work Order {wo.name}"
+
+    # Set batch and serial on finished good item row
+    for d in se.items:
+        if d.is_finished_item and d.item_code == wo.production_item:
+            if batch_name:
+                d.batch_no = batch_name
+                d.use_serial_batch_fields = 1
+            if serial_nos:
+                d.serial_no = serial_nos.strip()
+                d.use_serial_batch_fields = 1
+
+    se.flags.ignore_permissions = True
+    if not se.name:
+        se.insert(ignore_permissions=True)
+    else:
+        se.save(ignore_permissions=True)
+
+    se.submit()
+
+    # Transition Work Order workflow state
+    wo.reload()
+    if flt(wo.produced_qty) >= flt(wo.qty):
+        if wo.workflow_state != COMPLETED_STATE:
+            wo.db_set("workflow_state", COMPLETED_STATE)
+            wo.add_comment(
+                "Workflow",
+                _("Manufacture completed with Stock Entry {0} and Batch {1}").format(
+                    se.name, batch_name or ""
+                ),
+            )
+
+    return {
+        "status": "success",
+        "stock_entry": se.name,
+        "batch_no": batch_name,
+        "workflow_state": wo.workflow_state,
+        "produced_qty": wo.produced_qty,
+    }
+
+
+def on_stock_entry_submit(doc, method=None):
+    if doc.purpose == "Manufacture" and doc.work_order:
+        wo = frappe.get_doc("Work Order", doc.work_order)
+        if flt(wo.produced_qty) >= flt(wo.qty):
+            if wo.workflow_state != COMPLETED_STATE:
+                wo.db_set("workflow_state", COMPLETED_STATE)
+                wo.add_comment(
+                    "Workflow",
+                    _("Completed via Manufacture Stock Entry {0}").format(
+                        frappe.utils.get_link_to_form("Stock Entry", doc.name)
+                    ),
+                )
+
+
+def on_stock_entry_cancel(doc, method=None):
+    if doc.purpose == "Manufacture" and doc.work_order:
+        wo = frappe.get_doc("Work Order", doc.work_order)
+        if flt(wo.produced_qty) < flt(wo.qty):
+            if wo.workflow_state == COMPLETED_STATE:
+                wo.db_set("workflow_state", PRODUCTION_APPROVED_STATE)
+                wo.add_comment(
+                    "Workflow",
+                    _("Reverted to {0} after cancellation of Stock Entry {1}").format(
+                        PRODUCTION_APPROVED_STATE,
+                        frappe.utils.get_link_to_form("Stock Entry", doc.name),
+                    ),
+                )
+

@@ -248,7 +248,11 @@ doc_events = {
         "on_submit": "manufacturing_adv.work_order_workflow.process_work_order_workflow",
         "on_update_after_submit": "manufacturing_adv.work_order_workflow.process_work_order_workflow",
         "on_change": "manufacturing_adv.work_order_workflow.process_work_order_workflow",
-    }
+    },
+    "Stock Entry": {
+        "on_submit": "manufacturing_adv.work_order_workflow.on_stock_entry_submit",
+        "on_cancel": "manufacturing_adv.work_order_workflow.on_stock_entry_cancel",
+    },
 }
 fixtures = [
     {
