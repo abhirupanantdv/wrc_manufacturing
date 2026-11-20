@@ -253,6 +253,10 @@ doc_events = {
         "on_submit": "manufacturing_adv.work_order_workflow.on_stock_entry_submit",
         "on_cancel": "manufacturing_adv.work_order_workflow.on_stock_entry_cancel",
     },
+    "Serial and Batch Bundle": {
+        "before_insert": "manufacturing_adv.work_order_workflow.set_serial_and_batch_bundle_company",
+        "before_validate": "manufacturing_adv.work_order_workflow.set_serial_and_batch_bundle_company",
+    },
 }
 fixtures = [
     {

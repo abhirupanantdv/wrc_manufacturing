@@ -648,3 +648,17 @@ def on_stock_entry_cancel(doc, method=None):
                     ),
                 )
 
+
+def set_serial_and_batch_bundle_company(doc, method=None):
+    if not doc.company:
+        if doc.warehouse:
+            doc.company = frappe.db.get_value("Warehouse", doc.warehouse, "company")
+        if not doc.company and doc.voucher_type and doc.voucher_no:
+            doc.company = frappe.db.get_value(doc.voucher_type, doc.voucher_no, "company")
+        if not doc.company:
+            doc.company = (
+                frappe.defaults.get_user_default("Company")
+                or frappe.db.get_single_value("Global Defaults", "default_company")
+            )
+
+
