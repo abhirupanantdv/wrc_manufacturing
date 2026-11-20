@@ -128,6 +128,10 @@ def _make_and_submit_stock_entry(work_order_name, purpose, qty):
     if qty <= 0:
         return None
 
+    wo_company = frappe.db.get_value("Work Order", work_order_name, "company")
+    if wo_company:
+        frappe.flags.current_work_order_company = wo_company
+
     # ERPNext standard Work Order -> Stock Entry creation
     stock_entry_dict = make_stock_entry(
         work_order_name,
@@ -576,6 +580,7 @@ def complete_manufacture_with_batch(
         if manufacture_qty <= 0:
             frappe.throw(_("No quantity available to manufacture."))
 
+        frappe.flags.current_work_order_company = wo.company
         se_dict = make_stock_entry(wo.name, "Manufacture", manufacture_qty)
         se = frappe.get_doc(se_dict)
         se.naming_series = get_stock_entry_naming_series(wo)
@@ -651,8 +656,17 @@ def on_stock_entry_cancel(doc, method=None):
 
 def set_serial_and_batch_bundle_company(doc, method=None):
     if not doc.company:
-        if doc.warehouse:
+        if frappe.flags.get("current_work_order_company"):
+            doc.company = frappe.flags.get("current_work_order_company")
+        if not doc.company and doc.warehouse:
             doc.company = frappe.db.get_value("Warehouse", doc.warehouse, "company")
+        if not doc.company and getattr(doc, "entries", None):
+            for e in doc.entries:
+                if getattr(e, "warehouse", None):
+                    wh_company = frappe.db.get_value("Warehouse", e.warehouse, "company")
+                    if wh_company:
+                        doc.company = wh_company
+                        break
         if not doc.company and doc.voucher_type and doc.voucher_no:
             doc.company = frappe.db.get_value(doc.voucher_type, doc.voucher_no, "company")
         if not doc.company:
@@ -660,5 +674,7 @@ def set_serial_and_batch_bundle_company(doc, method=None):
                 frappe.defaults.get_user_default("Company")
                 or frappe.db.get_single_value("Global Defaults", "default_company")
             )
+        if not doc.company:
+            doc.company = frappe.db.get_value("Company", {}, "name")
 
 
